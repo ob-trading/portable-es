@@ -47,10 +47,35 @@ class Adam(Optimizer):
 
     def compute_grads(self, origin_g, stepsize):
         self.step += 1
-        a = stepsize * np.sqrt(1 - self.beta2 ** self.step) / (1 - self.beta1 ** self.step)
         self.m = self.beta1 * self.m + (1 - self.beta1) * origin_g
         self.v = self.beta2 * self.v + (1 - self.beta2) * (origin_g ** 2)
-        return a * self.m / (torch.sqrt(self.v) + self.epsilon)
+
+        m_corr = self.m/(1-self.beta1)
+        v_corr = self.v/(1-self.beta2)
+
+        return a * m_corr / (torch.sqrt(v_corr) + self.epsilon)
+
+class AdaBelief(Optimizer):
+    def __init__(self, beta1=0.99, beta2=0.999, epsilon=1e-8):
+        self.epsilon = epsilon
+        self.beta1 = beta1
+        self.beta2 = beta2
+    
+    def reset(self, num_params, flat_init):
+        super().reset(num_params, flat_init)
+        self.m = torch.zeros_like(flat_init)
+        self.s = torch.zeros_like(flat_init)
+        self.step = 0
+
+    def compute_grads(self, origin_g, stepsize):
+        self.step += 1
+        self.m = (self.beta1 * self.m) + ((1 - self.beta1) * origin_g)
+        self.s = (self.beta2 * self.s) + (1 - self.beta2) * ((origin_g - self.m) ** 2)
+
+        m_corr = self.m/(1-self.beta1)
+        s_corr = (self.s + self.epsilon)/(1-self.beta2)
+
+        return (stepsize * m_corr) / (torch.sqrt(s_corr) + self.epsilon)
 
 class AdaMM(Optimizer):
     def __init__(self, beta1=0.9, beta2=0.3):
