@@ -85,3 +85,4 @@ An additional consideration is that traditional pytorch optimizers are not as ea
   - [ ] Create a hyperparameter scheduler
 - [ ] Further Profile portable_es
 - [ ] Write-up on zeroth-order optimization
+- [ ] Recurrent wrapper
