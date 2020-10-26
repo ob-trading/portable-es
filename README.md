@@ -1,5 +1,5 @@
 # Portable ES
-Portable ES is a distributed optimization framework built on PyTorch & Numpy.
+Portable ES is a distributed gradient-less optimization framework built on PyTorch & Numpy.
 It's main focus is autoregressive reinforcement learning scenarios.
 A lot of the code from PyTorch has been replaced as they are not intended for this purpose.
 It was originally made as an Evolutionary Strategies (ES) implementation.
