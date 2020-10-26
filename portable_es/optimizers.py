@@ -78,22 +78,26 @@ class AdaBelief(Optimizer):
         return (stepsize * m_corr) / (torch.sqrt(s_corr) + self.epsilon)
 
 class AdaMM(Optimizer):
-    def __init__(self, beta1=0.9, beta2=0.3):
+    def __init__(self, beta1=0.99, beta2=0.999):
         self.beta1 = beta1
         self.beta2 = beta2
         self.v_init = 1e-7 #0.00001
 
     def reset(self, num_params, flat_init):
         super().reset(num_params, flat_init)
-        # self.v_hat = self.v_init * torch.ones((self.dim,), requires_grad=False)
         self.m = torch.zeros_like(flat_init)
+        self.v_hat = self.v_init * torch.ones_like(flat_init)
         self.v = self.v_init * torch.ones_like(flat_init)
 
     def compute_grads(self, origin_g, stepsize):
+        
         self.m = self.beta1 * self.m + (1 - self.beta1) * origin_g
         self.v = self.beta2 * self.v + (1 - self.beta2) * (origin_g ** 2)
-        # self.v_hat = torch.max(self.v_hat,self.v)
-        return stepsize * self.m /torch.sqrt(self.v)
+        self.v_hat = torch.max(self.v_hat,self.v)
+        # TODO: Paper says diag(v_hat), but reference impl says raw :thinking:
+        # V_hat = torch.diag(self.v_hat)
+        delta = stepsize * self.m / torch.sqrt(self.v_hat)
+        return delta
 
 
 class AdaScale(Optimizer):
