@@ -53,7 +53,7 @@ class Adam(Optimizer):
         m_corr = self.m/(1-self.beta1)
         v_corr = self.v/(1-self.beta2)
 
-        return a * m_corr / (torch.sqrt(v_corr) + self.epsilon)
+        return stepsize * m_corr / (torch.sqrt(v_corr) + self.epsilon)
 
 class AdaBelief(Optimizer):
     def __init__(self, beta1=0.99, beta2=0.999, epsilon=1e-8):

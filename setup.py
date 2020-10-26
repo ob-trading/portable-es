@@ -26,7 +26,7 @@ setuptools.setup(
         'Programming Language :: Python :: 3.8',
     ],
     install_requires=[
-        'pytorch>=1.4.0',
+        'torch>=1.4.0',
         'numpy',
         'tensorboardx',
         'distributed_worker>=1.2.1'
