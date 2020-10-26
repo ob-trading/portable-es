@@ -8,8 +8,8 @@ Block here is defined as a set of homogenous parameters (e.g. Bias-for-Layer-N o
 1. Arr <- [std(R)] * parameter-blocks
 2. \theta <- Copy/Set K random parameter blocks to 1
 3. For P:
-  3.1. Sample \psi <- N ~ (0, 1) * \theta
-  3.2. R_i <- Evaluate Policy \pi + (\psi * \sigma)
+  - 3.1. Sample \psi <- N ~ (0, 1) * \theta
+  - 3.2. R_i <- Evaluate Policy \pi + (\psi * \sigma)
 6. For block in \theta:
-  5. Arr_block <- Arr_block * \beta_1 + std(R) * (1-\beta_1)
-  6. \pi <- \pi + block * \sigma * mean(Arr) / Arr_block
+  - 6.1. Arr_block <- Arr_block * \beta_1 + std(R) * (1-\beta_1)
+  - 6.2 \pi <- \pi + block * \sigma * mean(Arr) / Arr_block
