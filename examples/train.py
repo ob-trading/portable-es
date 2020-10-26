@@ -65,7 +65,7 @@ class RNNClassifier(torch.nn.Module):
         self.hn[:] = 0
 
 from portable_es import ESManager, ESWorker
-from portable_es.optimizers import Adam
+from portable_es.optimizers import Adam, AdaBelief, RAdam, AdaMM
 
 config = {
     # Hyperparameters
@@ -73,7 +73,7 @@ config = {
     'sigma_decay': 0.9999,
     'lr': 0.03,         # Big population so we can afford a high learning rate
     'lr_decay': 0.99999,
-    'optimizer': Adam(),
+    'optimizer': AdaBelief(),
     'popsize': 256,
     'antithetic': True,
     'reward_norm': 'ranked',  # ranked, stdmean # TODO: topk
