@@ -3,7 +3,7 @@ import setuptools
 
 setuptools.setup(
     name='portable-es',
-    version='1.2.13',
+    version='1.2.14',
     description=(
         'Portable ES is a distributed gradient-less optimization framework built on PyTorch & Numpy.'
     ),
