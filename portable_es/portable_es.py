@@ -251,7 +251,7 @@ class ESWorker(DistributedWorker):
 
 class ESManager(DistributedManager):
     def __init__(self, config):
-        super().__init__(("0.0.0.0", 8003,))
+        super().__init__("0.0.0.0")
         self.tasked = set()
         self.done = False
         self.config = config

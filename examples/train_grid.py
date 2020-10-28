@@ -4,8 +4,11 @@ import torch
 import numpy as np
 from typing import Tuple
 
+# An example using grid-based hyper-parameter search
+
 def cartpole_cast(action):
     return int(action.argmax().cpu().detach())
+
 
 class RNNClassifier(torch.nn.Module):
     def __init__(self, outputs, channels=1, hidden=25, layers=1, device=None):
@@ -45,9 +48,18 @@ class RNNClassifier(torch.nn.Module):
 
 from portable_es import ESManager, ESWorker
 from portable_es.optimizers import Adam, AdaBelief, RAdam, AdaMM
+from portable_es.utils import generate_matrix
 from portable_es.compat import GymWrapper
 
-config = {
+model_grid = {
+    'channels': 4,
+    'hidden': [5, 10, 20],
+    'layers': [1, 2, 3]
+}
+
+model_matrix = generate_matrix(model_grid)
+
+config_grid = {
     # Hyperparameters
     'sigma': 0.1,
     'sigma_decay': 0.9999,
@@ -56,15 +68,15 @@ config = {
     'optimizer': AdaBelief(),
     'popsize': 256,
     'antithetic': True,
-    'reward_norm': 'ranked',  # ranked, stdmean
-    'epochs': 1000,
+    'reward_norm': 'ranked',
+    'epochs': 200,
     'device': 'cpu',
     'pre_training_epochs': 0,
     'logdir': 'cartpole1-rnn-1',
 
     'model_class': RNNClassifier,
     'model_args': (2,),
-    'model_kwargs': {'channels': 4, 'hidden': 5, 'layers': 2},
+    'model_kwargs': list(model_matrix),
 
     'env_eval_every': 5,
     'env_class': GymWrapper,
@@ -75,31 +87,33 @@ config = {
 def params_count(model):
     return sum(p.numel() for p in model.parameters())
 
-manager = ESManager(config)
-print(f'model params: {params_count(manager.model.model)} ({params_count(manager.model.model) * 4} bytes)')
+for config in generate_matrix(config_grid):
+    # TODO: Clean up declarations
+    file = f'RNN{config["model_kwargs"]["hidden"]}-{config["model_kwargs"]["layers"]}.pt'
+    if os.path.isfile(file):
+        print(f'Skipping {file}, already trained')
+        continue
+    trace_file = f'RNN{config["model_kwargs"]["hidden"]}-{config["model_kwargs"]["layers"]}-trace.pt'
 
-for n in range(6):
-    manager.create_local_worker(ESWorker)
+    config['logdir'] = f'rnn{config["model_kwargs"]["hidden"]}-{config["model_kwargs"]["layers"]}-D3-matrix'
+    print(f'Running... ({file}, {config["logdir"]})')
 
-# For adding remote workers
-print('client creds:', manager.get_client_args())
+    manager = ESManager(config)
+    print('Params:', params_count(manager.model.model))
 
-# Setup exit handler
-import atexit
+    for n in range(5):
+        manager.create_local_worker(ESWorker)
 
-def exit_handler():
-    torch.save(manager.model.model, 'es-model.pt')
-    # For use with plot_esumap.py
+    # For adding remote workers
+    print('client creds:', manager.get_client_args())
+
+    while not manager.done:
+        manager.run_once()
+
+    torch.save(manager.model.model, file)
     torch.save({'trace': manager.update_history,
-                'raw_trace': manager.raw_history, **config}, 'checkpt-trace.pt')
+                'raw_trace': manager.raw_history, **config}, trace_file)
 
-atexit.register(exit_handler)
+    # Stop all workers
+    manager.stop()
 
-while not manager.done:
-    manager.run_once()
-    # Can do other (short) tasks here as well
-
-torch.save(manager.model.model, 'es-model.pt')
-
-# Stop all workers
-manager.stop()
