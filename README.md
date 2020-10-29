@@ -15,6 +15,7 @@ It was originally made as an Evolutionary Strategies (ES) implementation.
 * Reuse PyTorch model/architectures
 * Optimized for quick training
 * Very simplistic implementation
+* Extendable grid search
 
 ## Caveats
 * Heterogeneous computing isn't always deterministic
@@ -43,6 +44,15 @@ class EnvInterface:
 ## Configuring your training
 Check out `examples/train.py` for a full example with configuration.
 
+## Grid Seach
+Check out `examples/train_grid.py` for the full script.
+It's a very minimal implementation (about 14 loc), but also very powerful.
+It will run through all possible permutations of the specified super-config and log them as usual to the tensorboard.
+
+> Note that currently remote workers don't auto-rejoin so this only works on a local instance.
+
+An example output: [the tensorboard](https://tensorboard.dev/experiment/qxy4xBDOQ7GwXMD7ILkuZw/#scalars)
+
 ## FAQ
 ### Why the *_args/*_kwargs?
 These are the standard way to refer to pythonic arguments, and is done partially for optimization and partially for compatibility.
@@ -64,3 +74,4 @@ We may add support for the regular PyTorch optimizers later on.
 - [ ] Further Profile portable_es
 - [ ] Write-up on zeroth-order optimization
 - [ ] Recurrent wrapper
+- [ ] Auto-rejoining workers
