@@ -63,13 +63,13 @@ config_grid = {
     # Hyperparameters
     'sigma': 0.1,
     'sigma_decay': 0.9999,
-    'lr': 0.03,         # Big population so we can afford a high learning rate
+    'lr': 0.01,
     'lr_decay': 0.99999,
     'optimizer': AdaBelief(),
-    'popsize': 256,
+    'popsize': 128,
     'antithetic': True,
     'reward_norm': 'ranked',
-    'epochs': 200,
+    'epochs': 100,
     'device': 'cpu',
     'pre_training_epochs': 0,
     'logdir': 'cartpole1-rnn-1',
@@ -117,3 +117,5 @@ for config in generate_matrix(config_grid):
     # Stop all workers
     manager.stop()
 
+
+# TODO: show create summary table?

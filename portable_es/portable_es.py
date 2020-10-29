@@ -311,6 +311,8 @@ class ESManager(DistributedManager):
         self.writer.add_scalar('lr', self['lr'], self.epoch)
         self.writer.add_scalar('sigma', self['sigma'], self.epoch)
         self.writer.add_scalar('update_norm', delta_e, self.epoch)
+        if epoch_s > 0:
+            self.writer.add_scalar('time_per_epoch', epoch_s, self.epoch)
         if log_stats:
             print(torch.std(delta), torch.mean(delta),
                   torch.median(delta), torch.max(delta))
