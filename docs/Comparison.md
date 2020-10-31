@@ -5,7 +5,6 @@ config (omitted unrelated/redundant fields):
 {
     'sigma': 0.1,
     'sigma_decay': 0.9999,
-    # Big population so we can afford a relatively high learning rate
     'lr': 0.03,
     'lr_decay': 0.99999,
     'popsize': 256,
@@ -17,7 +16,7 @@ config (omitted unrelated/redundant fields):
     'model_kwargs': {'channels': 4, 'hidden': 5, 'layers': 2},
 
     'env_class': GymWrapper,
-    'env_config': {'gym_name': 'CartPole-v1', 'castf': cartpole_cast},
+    'env_config': {'gym_name': 'CartPole-v1', 'castf': argmax_cast},
     'env_episodes': 1,
 }
 ```
@@ -39,3 +38,35 @@ config (omitted unrelated/redundant fields):
   * Likely because they are targeting Zeroth-Order opt. they kept the smoothing low
 * Radam includes a type of warmup, which might explain the low score
 
+
+## Acrobot-v1
+config (omitted unrelated/redundant fields):
+```
+config = {
+    # Hyperparameters
+    'sigma': 0.1,
+    'sigma_decay': 0.9999,
+    'lr': 0.01,
+    'lr_decay': 0.99999,
+    'popsize': 256,
+    'antithetic': True,
+    'reward_norm': 'ranked',
+
+    'model_class': RNNClassifier,
+    'model_args': (3,),
+    'model_kwargs': {'channels': 6, 'hidden': 5, 'layers': 3},
+
+    'env_class': GymWrapper,
+    'env_config': {'gym_name': 'Acrobot-v1', 'castf': argmax_cast},
+    'env_episodes': 1,
+}
+```
+
+### SpeedRun
+25 Epochs using the model from `train.py` in `examples`.
+```
+1. AdaBelief  (Oct 2020; `295cf5d`; -82.1,  σ=26.26)
+2. Adam v2    (Oct 2020; `295cf5d`; -84.9,  σ=34.51)
+3. AdaMM v2   (Oct 2020; `295cf5d`; -102.0, σ=73.68)
+4. RAdam v1   (Oct 2020; `295cf5d`; -211.6, σ=182.32)
+```
