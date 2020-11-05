@@ -4,13 +4,14 @@ import numpy as np
 #! Note: use Zeros_like (and similar) so the device/requires_grad get transferred as well
 class Optimizer:
     set_params = False # Overwrite params instead of updating
+    internal_mut = False # Modifying parameters in-place (1.4+)
 
     # All memory alloc here
-    def reset(self, num_params, flat_init):
+    def reset(self, num_params, flat_init, param_shapes):
         self.dim = num_params
 
     # Computation here
-    def compute_grads(self, origin_g, stepsize):
+    def compute_grads(self, origin_g, model, stepsize):
         raise NotImplementedError
 
     # Per batch-entry processing here if needed
@@ -18,18 +19,18 @@ class Optimizer:
         pass
 
 class BasicSGD(Optimizer):
-    def compute_grads(self, origin_g, stepsize):
+    def compute_grads(self, origin_g, model, stepsize):
         return stepsize * origin_g
 
 class SGD(Optimizer):
     def __init__(self, momentum=0.9):
         self.momentum = momentum
 
-    def reset(self, num_params, flat_init):
+    def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init)
         self.v = torch.zeros_like(flat_init)
 
-    def compute_grads(self, origin_g, stepsize):
+    def compute_grads(self, origin_g, model, stepsize):
         self.v = self.momentum * self.v + (1.0 - self.momentum) * origin_g
         return stepsize * self.v
 
@@ -39,13 +40,13 @@ class Adam(Optimizer):
         self.beta1 = beta1
         self.beta2 = beta2
     
-    def reset(self, num_params, flat_init):
+    def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init)
         self.m = torch.zeros_like(flat_init)
         self.v = torch.zeros_like(flat_init)
         self.step = 0
 
-    def compute_grads(self, origin_g, stepsize):
+    def compute_grads(self, origin_g, model, stepsize):
         self.step += 1
         self.m = self.beta1 * self.m + (1 - self.beta1) * origin_g
         self.v = self.beta2 * self.v + (1 - self.beta2) * (origin_g ** 2)
@@ -61,13 +62,13 @@ class AdaBelief(Optimizer):
         self.beta1 = beta1
         self.beta2 = beta2
     
-    def reset(self, num_params, flat_init):
+    def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init)
         self.m = torch.zeros_like(flat_init)
         self.s = torch.zeros_like(flat_init)
         self.step = 0
 
-    def compute_grads(self, origin_g, stepsize):
+    def compute_grads(self, origin_g, model, stepsize):
         self.step += 1
         self.m = (self.beta1 * self.m) + ((1 - self.beta1) * origin_g)
         self.s = (self.beta2 * self.s) + (1 - self.beta2) * ((origin_g - self.m) ** 2)
@@ -83,14 +84,13 @@ class AdaMM(Optimizer):
         self.beta2 = beta2
         self.v_init = 1e-7 #0.00001
 
-    def reset(self, num_params, flat_init):
+    def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init)
         self.m = torch.zeros_like(flat_init)
         self.v_hat = self.v_init * torch.ones_like(flat_init)
         self.v = self.v_init * torch.ones_like(flat_init)
 
-    def compute_grads(self, origin_g, stepsize):
-        
+    def compute_grads(self, origin_g, model, stepsize):
         self.m = self.beta1 * self.m + (1 - self.beta1) * origin_g
         self.v = self.beta2 * self.v + (1 - self.beta2) * (origin_g ** 2)
         self.v_hat = torch.max(self.v_hat,self.v)
@@ -110,7 +110,7 @@ class AdaScale(Optimizer):
         self.mean_norm = None
         self.b = 0
         
-    def reset(self, num_params, flat_init):
+    def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init)
 
     def process_subgrad(self, g_hat):
@@ -121,7 +121,7 @@ class AdaScale(Optimizer):
         self.b += 1
         
 
-    def compute_grads(self, origin_g, stepsize):
+    def compute_grads(self, origin_g, model, stepsize):
         aggr_norm = torch.norm(origin_g) ** 2 #
 
         # (E[ 1/s * sum(||g_t^(i)||**2) ] + eps) / (E[||g_t||**2 ] + eps)
@@ -142,14 +142,14 @@ class RAdam(Optimizer):
         self.p_inf = 2/(1-self.beta2) - 1
         self.epsilon = epsilon
 
-    def reset(self, num_params, flat_init):
+    def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init)
         # self.v_hat = self.v_init * torch.ones((self.dim,), requires_grad=False)
         self.m = torch.zeros_like(flat_init)
         self.v = torch.zeros_like(flat_init)
         self.step = 0
 
-    def compute_grads(self, origin_g, stepsize):
+    def compute_grads(self, origin_g, model, stepsize):
         self.step += 1
         self.v = self.beta2 * self.v + (1 - self.beta2) * (origin_g ** 2)
         self.m = self.beta1 * self.m + (1 - self.beta1) * origin_g
@@ -173,13 +173,13 @@ class LookAhead(Optimizer):
         self.a = alpha
         self.step = 0
 
-    def reset(self, num_params, flat_init):
+    def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init)
         self.slow = flat_init.clone().detach()
         self.fast = flat_init.clone().detach()
         self.opt.reset(num_params, flat_init)
 
-    def compute_grads(self, origin_g, stepsize):
+    def compute_grads(self, origin_g, model, stepsize):
         self.step += 1
         if self.step % self.k == 0:
             self.fast += self.opt.compute_grads(origin_g, stepsize)
@@ -189,3 +189,42 @@ class LookAhead(Optimizer):
             self.fast += self.opt.compute_grads(origin_g, stepsize)
 
         return self.fast
+
+class NovoGrad(Optimizer):
+    internal_mut = True
+    # b1=[0.9,0.95], b2=[0.2,0.5]
+    def __init__(self, beta1=0.9, beta2=0.5, weight_decay=0.002, epsilon=1e-8):
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.d = weight_decay
+        self.eps = epsilon
+
+    def reset(self, num_params, flat_init, param_shapes):
+        super().reset(num_params, flat_init, param_shapes)
+
+        self.m = []
+        for s in param_shapes:
+            self.m.append(torch.zeros(s, dtype=flat_init.dtype, device=flat_init.device, requires_grad=flat_init.requires_grad))
+        self.v = np.zeros(len(param_shapes))
+        self.step = 0
+
+    def compute_grads(self, origin_g, model, stepsize):
+        self.step += 1
+        idx = 0
+        i = 0
+        for param in model.parameters():
+            size = np.product(param.data.shape)
+            block = origin_g[idx:idx+size].view(param.data.shape)
+
+            if self.step == 1:
+                # Init v & m
+                self.v[i] = torch.norm(block) ** 2
+                self.m[i] = block/np.sqrt(self.v[i]) + self.d * param.data
+            else:
+                self.v[i] = self.beta2 * self.v[i] + (1-self.beta1) * torch.norm(block) ** 2
+                self.m[i] = self.beta1 * self.m[i] + (block/(np.sqrt(self.v[i]) + self.eps) + self.d * param.data)
+                param.data += self.m[i] * stepsize
+            
+            i += 1
+            idx += size
+        

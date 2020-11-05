@@ -31,6 +31,15 @@ def disable_grad(model):
     for param in model.parameters():
         param.requires_grad = False
 
+def sign(a):
+    return (a > 0) - (a < 0)
+
+def get_random_tensor(shape, device, seed):
+    gen = torch._C.Generator(device=device)
+    gen.manual_seed(abs(int(seed)))
+    partial_delta = torch.randn((shape,), generator=gen, requires_grad=False, device=device)
+    return partial_delta
+
 class ModelWrapper(torch.nn.Module):
     def __init__(self, model, device="cpu", **kwargs):
         super().__init__()
@@ -71,9 +80,6 @@ class ModelWrapper(torch.nn.Module):
             idx += size
             param.data.copy_(block)
 
-    def sign(self, a):
-        return (a > 0) - (a < 0)
-
     def update_from_epoch(self, update, log=False, optimizer=None):
         seed_dict = update['deltas']
 
@@ -88,30 +94,27 @@ class ModelWrapper(torch.nn.Module):
             raise Exception("update_from_epoch requires optimizer")
 
         for seed in seed_dict:
-            gen = torch._C.Generator(device=self.device)
-            gen.manual_seed(abs(int(seed)))
-            psign = self.sign(int(seed))
-
-            partial_delta = torch.randn((self.NPARAMS,), generator=gen, requires_grad=False,
-                                 device=self.device) * (sigma * seed_dict[seed] * psign)
+            psign = sign(int(seed))
+            partial_delta = get_random_tensor(self.NPARAMS, str(self.device), seed) * (sigma * seed_dict[seed] * psign)
 
             optimizer.process_subgrad(partial_delta)
             delta += partial_delta
 
+        # TODO: add flat weights? needed for compute_grads
         if optimizer.set_params:
-            self.set_from_delta(optimizer.compute_grads(delta, alpha))
+            self.set_from_delta(optimizer.compute_grads(delta, self.model, alpha))
+        elif optimizer.internal_mut:
+            optimizer.compute_grads(delta, self.model, alpha)
         else:
-            delta = optimizer.compute_grads(delta, alpha)
+            delta = optimizer.compute_grads(delta, self.model, alpha)
             self.update_from_delta(delta)
+        
             # print(torch.std(delta), torch.mean(delta), torch.median(delta), torch.max(delta))
         return delta
 
     def apply_seed(self, seed, scalar=1., sigma=None):
-        gen = torch._C.Generator(device=self.device)
         seed = int(seed)
-        gen.manual_seed(abs(seed))
-        delta = torch.randn((self.NPARAMS,), generator=gen, requires_grad=False,
-                            device=self.device) * ((sigma or self.config['sigma']) * scalar * self.sign(seed))
+        delta = get_random_tensor(self.NPARAMS, str(self.device), seed) * ((sigma or self.config['sigma']) * scalar * sign(seed))
         self.update_from_delta(delta)
 
     def apply_sparse_delta(self, sparse_params):
@@ -211,7 +214,7 @@ class ESWorker(DistributedWorker):
         self.model = ModelWrapper(self._model, device=self.init_config['device'])
         self.model.set_config(self.run_config)
         self.optimizer = self.init_config['optimizer']
-        self.optimizer.reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()).detach())
+        self.optimizer.reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()).detach(), self.model.model_shapes)
         
     def create_env(self):
         self.env_class = self.init_config['env_class']
@@ -284,7 +287,7 @@ class ESManager(DistributedManager):
         self.model = ModelWrapper(_model, device=self['device'])
         self.model.set_config({'sigma': self['sigma'], 'lr': self['lr']})
 
-        self['optimizer'].reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()))
+        self['optimizer'].reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()), self.model.model_shapes)
 
     def stop(self):
         super().stop()

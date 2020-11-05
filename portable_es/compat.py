@@ -1,4 +1,6 @@
 import torch
+import gym
+from typing import Tuple
 
 class GymWrapper:
     def __init__(self, gym_name='CartPole-v1', castf=lambda x: x, **kwargs):
