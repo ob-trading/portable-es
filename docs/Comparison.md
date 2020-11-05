@@ -24,13 +24,13 @@ config (omitted unrelated/redundant fields):
 ### SpeedRun
 25 Epochs using the model from `train.py` in `examples`.
 ```
-1. Novograd v1  (Nov 2020; `<hash> `; 497.6,  σ=18.76)
-1. AdaBelief    (Oct 2020; `9a4a3ac`; 484.1,  σ=41.00)
-2. Adam v2      (Oct 2020; `9a4a3ac`; 220.9,  σ=82.99)
-3. AdaMM v2     (Oct 2020; `e6776de`; 129.0, σ=112.14)
-4. Adam v1      (Sep 2020; `19c49a0`;  97.6,  σ=61.92)
-5. AdaMM v1     (Sep 2020; `19c49a0`;  68.4,  σ=39.49)
-6. Radam v1     (Oct 2020; `b0dd8e1`;  48.6,  σ=52.29)
+1. Novograd v1  (Nov 2020; `dcd4733`; 497.6,  σ=18.76)
+2. AdaBelief    (Oct 2020; `9a4a3ac`; 484.1,  σ=41.00)
+3. Adam v2      (Oct 2020; `9a4a3ac`; 220.9,  σ=82.99)
+4. AdaMM v2     (Oct 2020; `e6776de`; 129.0, σ=112.14)
+5. Adam v1      (Sep 2020; `19c49a0`;  97.6,  σ=61.92)
+6. AdaMM v1     (Sep 2020; `19c49a0`;  68.4,  σ=39.49)
+7. Radam v1     (Oct 2020; `b0dd8e1`;  48.6,  σ=52.29)
 ```
 
 
@@ -68,7 +68,7 @@ config = {
 ```
 1. AdaBelief    (Oct 2020; `295cf5d`; -82.1,  σ=26.26)
 2. Adam v2      (Oct 2020; `295cf5d`; -84.9,  σ=34.51)
-5. Novograd v1  (Nov 2020; `<hash> `; -86.3,  σ=42.03)
-3. AdaMM v2     (Oct 2020; `295cf5d`; -102.0, σ=73.68)
-4. RAdam v1     (Oct 2020; `295cf5d`; -211.6, σ=182.32)
+3. Novograd v1  (Nov 2020; `dcd4733`; -86.3,  σ=42.03)
+4. AdaMM v2     (Oct 2020; `295cf5d`; -102.0, σ=73.68)
+5. RAdam v1     (Oct 2020; `295cf5d`; -211.6, σ=182.32)
 ```
