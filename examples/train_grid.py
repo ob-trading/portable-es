@@ -61,10 +61,7 @@ model_matrix = generate_matrix(model_grid)
 
 config_grid = {
     # Hyperparameters
-    'sigma': 0.1,
-    'sigma_decay': 0.9999,
-    'lr': 0.01,
-    'lr_decay': 0.99999,
+    'scheduler': DecayScheduler(ilr=0.01, lr_decay=0.99999, isigma=0.1, sigma_decay=0.9999),
     'optimizer': AdaBelief(),
     'popsize': 128,
     'antithetic': True,

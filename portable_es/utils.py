@@ -1,6 +1,8 @@
 import math
 import copy
 import torch
+from functools import wraps
+import inspect
 
 def create_log_gaussian(mean, log_std, t):
     quadratic = -((0.5 * (t - mean) / (log_std.exp())).pow(2))
@@ -34,10 +36,13 @@ def weights_init_(m):
         torch.nn.init.xavier_uniform_(m.weight, gain=1)
         torch.nn.init.constant_(m.bias, 0)
 
-# {x: y[], a: b[]} -> [{x: y[0], a: b[0]}, {x: y[0], a: b[1]}, ....]
-# Generates matrix of all permutations in a dictionary of arrays
-# If non array is provided it is assumed to be a static value
 def generate_matrix(matrix: dict):
+    """
+    Generates matrix of all permutations in a dictionary of arrays
+    If non array is provided it is assumed to be a static value
+
+    >>> {x: y[], a: b[]} -> [{x: y[0], a: b[0]}, {x: y[0], a: b[1]}, ....]
+    """
     x = list(matrix)[0]
     m = copy.deepcopy(matrix) # TODO: fix non-picklable iterables (i.e. generators)
     del m[x]
@@ -52,3 +57,30 @@ def generate_matrix(matrix: dict):
                 yield {x: y, **om}
         else:
             yield {x: y}
+
+def initializer(func):
+    """
+    Automatically assigns the parameters.
+
+    >>> class process:
+    ...     @initializer
+    ...     def __init__(self, cmd, reachable=False, user='root'):
+    ...         pass
+    >>> p = process('halt', True)
+    >>> p.cmd, p.reachable, p.user
+    ('halt', True, 'root')
+    """
+    names, varargs, keywords, defaults = inspect.getargspec(func)
+
+    @wraps(func)
+    def wrapper(self, *args, **kargs):
+        for name, arg in list(zip(names[1:], args)) + list(kargs.items()):
+            setattr(self, name, arg)
+
+        for name, default in zip(reversed(names), reversed(defaults)):
+            if not hasattr(self, name):
+                setattr(self, name, default)
+
+        func(self, *args, **kargs)
+
+    return wrapper

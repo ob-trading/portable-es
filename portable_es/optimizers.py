@@ -27,7 +27,7 @@ class SGD(Optimizer):
         self.momentum = momentum
 
     def reset(self, num_params, flat_init, param_shapes):
-        super().reset(num_params, flat_init)
+        super().reset(num_params, flat_init, param_shapes)
         self.v = torch.zeros_like(flat_init)
 
     def compute_grads(self, origin_g, model, stepsize):
@@ -41,7 +41,7 @@ class Adam(Optimizer):
         self.beta2 = beta2
     
     def reset(self, num_params, flat_init, param_shapes):
-        super().reset(num_params, flat_init)
+        super().reset(num_params, flat_init, param_shapes)
         self.m = torch.zeros_like(flat_init)
         self.v = torch.zeros_like(flat_init)
         self.step = 0
@@ -57,13 +57,13 @@ class Adam(Optimizer):
         return stepsize * m_corr / (torch.sqrt(v_corr) + self.epsilon)
 
 class AdaBelief(Optimizer):
-    def __init__(self, beta1=0.99, beta2=0.999, epsilon=1e-8):
+    def __init__(self, beta1=0.9, beta2=0.999, epsilon=1e-8):
         self.epsilon = epsilon
         self.beta1 = beta1
         self.beta2 = beta2
     
     def reset(self, num_params, flat_init, param_shapes):
-        super().reset(num_params, flat_init)
+        super().reset(num_params, flat_init, param_shapes)
         self.m = torch.zeros_like(flat_init)
         self.s = torch.zeros_like(flat_init)
         self.step = 0
@@ -85,7 +85,7 @@ class AdaMM(Optimizer):
         self.v_init = 1e-7 #0.00001
 
     def reset(self, num_params, flat_init, param_shapes):
-        super().reset(num_params, flat_init)
+        super().reset(num_params, flat_init, param_shapes)
         self.m = torch.zeros_like(flat_init)
         self.v_hat = self.v_init * torch.ones_like(flat_init)
         self.v = self.v_init * torch.ones_like(flat_init)
@@ -111,7 +111,7 @@ class AdaScale(Optimizer):
         self.b = 0
         
     def reset(self, num_params, flat_init, param_shapes):
-        super().reset(num_params, flat_init)
+        super().reset(num_params, flat_init, param_shapes)
 
     def process_subgrad(self, g_hat):
         if self.mean_norm == None:
@@ -143,7 +143,7 @@ class RAdam(Optimizer):
         self.epsilon = epsilon
 
     def reset(self, num_params, flat_init, param_shapes):
-        super().reset(num_params, flat_init)
+        super().reset(num_params, flat_init, param_shapes)
         # self.v_hat = self.v_init * torch.ones((self.dim,), requires_grad=False)
         self.m = torch.zeros_like(flat_init)
         self.v = torch.zeros_like(flat_init)
@@ -174,7 +174,7 @@ class LookAhead(Optimizer):
         self.step = 0
 
     def reset(self, num_params, flat_init, param_shapes):
-        super().reset(num_params, flat_init)
+        super().reset(num_params, flat_init, param_shapes)
         self.slow = flat_init.clone().detach()
         self.fast = flat_init.clone().detach()
         self.opt.reset(num_params, flat_init)

@@ -86,8 +86,8 @@ class ModelWrapper(torch.nn.Module):
         delta = torch.zeros(
             (self.NPARAMS,), requires_grad=False, device=self.device)
 
-        sigma = update.get('sigma', self.config.get('sigma', 0.05))
-        alpha = update.get('lr', self.config.get('lr', 0.01))
+        sigma = update['sigma']
+        alpha = update['lr']
 
         optimizer = optimizer or self.optimizer
         if optimizer == None:
@@ -100,11 +100,12 @@ class ModelWrapper(torch.nn.Module):
             optimizer.process_subgrad(partial_delta)
             delta += partial_delta
 
-        # TODO: add flat weights? needed for compute_grads
         if optimizer.set_params:
             self.set_from_delta(optimizer.compute_grads(delta, self.model, alpha))
         elif optimizer.internal_mut:
+            x = torch.nn.utils.parameters_to_vector(self.model.parameters())
             optimizer.compute_grads(delta, self.model, alpha)
+            delta = torch.nn.utils.parameters_to_vector(self.model.parameters()) - x
         else:
             delta = optimizer.compute_grads(delta, self.model, alpha)
             self.update_from_delta(delta)
@@ -114,7 +115,7 @@ class ModelWrapper(torch.nn.Module):
 
     def apply_seed(self, seed, scalar=1., sigma=None):
         seed = int(seed)
-        delta = get_random_tensor(self.NPARAMS, str(self.device), seed) * ((sigma or self.config['sigma']) * scalar * sign(seed))
+        delta = get_random_tensor(self.NPARAMS, str(self.device), seed) * (sigma  * scalar * sign(seed))
         self.update_from_delta(delta)
 
     def apply_sparse_delta(self, sparse_params):
@@ -128,9 +129,6 @@ class ModelWrapper(torch.nn.Module):
                 param.data += sparse_params[i]
             i += 1
             idx += size
-
-    def set_config(self, config):
-        self.config = config
 
     def forward(self, *args, **kwargs):
         return self.model.forward(*args, **kwargs)
@@ -169,7 +167,7 @@ class ESWorker(DistributedWorker):
             # start_time = time.time()
 
             cmodel = copy.deepcopy(self.model)
-            cmodel.apply_seed(self.cseeds[cidx], scalar=1.)
+            cmodel.apply_seed(self.cseeds[cidx], scalar=1., sigma=self.run_config['sigma'])
             # cmodel.jit()
             episode_reward = 0.
             rstate = np.random.RandomState(self.env_seed)  # Is mutated by env
@@ -212,8 +210,8 @@ class ESWorker(DistributedWorker):
         self._model = self.init_config['model_class'](
             *self.init_config['model_args'], **self.init_config['model_kwargs'])
         self.model = ModelWrapper(self._model, device=self.init_config['device'])
-        self.model.set_config(self.run_config)
         self.optimizer = self.init_config['optimizer']
+        # NOTE: May hang on older version of pytorch for some reason, probably a deadlock in the cloning mechanism (<=1.4.0)
         self.optimizer.reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()).detach(), self.model.model_shapes)
         
     def create_env(self):
@@ -229,14 +227,13 @@ class ESWorker(DistributedWorker):
                 self.init_config = msg['init']
                 if self.init_config['device'] == 'cuda':
                     self.init_config['device'] += ':%d' % np.random.randint(0, torch.cuda.device_count())
-                self.create_model()
+                self.create_model() 
                 self.create_env()
 
             if msg.get('run', False):
                 self.cseeds = msg['run']['seeds']
                 self.env_seed = msg['run']['env_seed']
                 self.run_config = msg['run']['config']
-                self.model.set_config(self.run_config)
                 self.results = {}
                 # print('Running', self.env_seed)
 
@@ -272,22 +269,39 @@ class ESManager(DistributedManager):
         self.epoch = 0
         self.writer = SummaryWriter('runs/%s' % self['logdir'])
         self.last_print = None
-        self.last_epoch = 0
+        self.last_epoch = 1e9
         self.epoch_ttl = 60 * 5
 
         self.env = self['env_class'](**self['env_config'])
 
-        self.rand = np.random.RandomState(seed=self.config.get('seed', 42))
         # Seperated for reproducibility across populations
+        self.rand = np.random.RandomState(seed=self.config.get('seed', 42))
         self.env_rand = np.random.RandomState(seed=self.config.get('seed', 42)) 
 
         torch.manual_seed(2)
         _model = self['model_class'](
             *self['model_args'], **self['model_kwargs'])
         self.model = ModelWrapper(_model, device=self['device'])
-        self.model.set_config({'sigma': self['sigma'], 'lr': self['lr']})
 
         self['optimizer'].reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()), self.model.model_shapes)
+
+    @property
+    def _worker_config(self):
+        return {'sigma': self.sigma, 'lr': self.lr}
+
+    @property
+    def lr(self):
+        if callable(self['scheduler'].lr):
+            return self['scheduler'].lr()
+        else:
+            return self['scheduler'].lr
+
+    @property
+    def sigma(self):
+        if callable(self['scheduler'].sigma):
+            return self['scheduler'].sigma()
+        else:
+            return self['scheduler'].sigma
 
     def stop(self):
         super().stop()
@@ -305,14 +319,14 @@ class ESManager(DistributedManager):
         # Should be < 1, if > 1 model will adjust further than any of the tests did
         delta_e = torch.norm(delta)
         print("[Epoch %d, %.1fs/e]:\t mΔe: %.4f, lr: %.3f, σ: %.3f, ⟨r⟩: %.1f, rσ: %.2f, p: %d, workers: %d" %
-              (self.epoch, epoch_s, delta_e, self['lr'], self['sigma'], r, r_sigma, len(rewards), len(self.get_active_workers())))
+              (self.epoch, epoch_s, delta_e, self.lr, self.sigma, r, r_sigma, len(rewards), len(self.get_active_workers())))
         self.last_print = time.time()
         # self.writer.add_scalar('delta_e', delta_e, self.epoch)
         self.writer.add_scalar('pop', len(rewards), self.epoch)
         self.writer.add_scalar('avg_reward', r, self.epoch)
         self.writer.add_scalar('std_reward', r_sigma, self.epoch)
-        self.writer.add_scalar('lr', self['lr'], self.epoch)
-        self.writer.add_scalar('sigma', self['sigma'], self.epoch)
+        self.writer.add_scalar('lr', self.lr, self.epoch)
+        self.writer.add_scalar('sigma', self.sigma, self.epoch)
         self.writer.add_scalar('update_norm', delta_e, self.epoch)
         if epoch_s > 0:
             self.writer.add_scalar('time_per_epoch', epoch_s, self.epoch)
@@ -344,12 +358,12 @@ class ESManager(DistributedManager):
         rewards = {}
         for k, r in zip(self.results.keys(), list(x)):
             rewards[k] = r
-        #! DEBUG
+
         return rewards
 
     def get_update(self):
         fresult = self.get_processed_rewards()
-        update = {'sigma': self['sigma'], 'lr': self['lr'], 'deltas': fresult}
+        update = {**self._worker_config, 'deltas': fresult}
         return update
 
     def eval(self):
@@ -391,16 +405,14 @@ class ESManager(DistributedManager):
         self.broadcast({'update': update})
         self.results = {}
         self.epoch += 1
+        if getattr(self['scheduler'], 'step', None):
+            self['scheduler'].step()
 
         if self.epoch % self['env_eval_every'] == 0:
             self.eval()
 
     def loop_es_busy(self):
         pass
-
-    def scheduler_step(self):
-        self.config['lr'] *= self['lr_decay']
-        self.config['sigma'] *= self['sigma_decay']
 
     def loop(self):
         # No tasks pending, wait on exit
@@ -413,13 +425,12 @@ class ESManager(DistributedManager):
             self.on_es_ready()
             return
 
-        if self.last_epoch + self.epoch_ttl < time.time():
-            print('Timeout, uncompleted tasks (%d/%d):' % (len(self.results), self['popsize']) , self.tasked)
-            self.tasked = set()
-
         # Awaiting Results
         if len(self.tasked) > 0:
             self.loop_es_busy()
+            if self.last_epoch + self.epoch_ttl < time.time():
+                print('Timeout, uncompleted tasks (%d/%d):' % (len(self.results), self['popsize']) , self.tasked)
+                self.tasked = set()
             return
 
         # Send tasks to workers
@@ -433,8 +444,6 @@ class ESManager(DistributedManager):
             env_seed = self.env_rand.randint(0, 2**31)
         else:
             env_seed = 420691
-
-        self.scheduler_step()
 
         active = self.get_active_workers()
         if active:
@@ -451,7 +460,7 @@ class ESManager(DistributedManager):
                 # print('%d: %d tasks' % (x, len(task)))
 
                 self.send(x, {'run': {'seeds': task, 'env_seed': env_seed,
-                                    'config': {'sigma': self['sigma'], 'lr': self['lr']}}})
+                                    'config': self._worker_config}})
                 self.tasked.add(x)
 
     def on_new_worker(self, worker: int):
@@ -461,15 +470,14 @@ class ESManager(DistributedManager):
 
     def on_worker_disconnect(self, worker: int):
         print('Worker disconnected %d' % worker)
-        # Worker removed; this epoch will have slightly smaller population :/
         try:
+            # Worker removed; this epoch will have slightly smaller population :/
             self.tasked.remove(worker)
         except KeyError:
             print('Tried removing %d from tasked but no was not assigned any task (or already completed the task)' % worker)
 
     def handle_msg(self, worker: int, msg: Any):
         # Worker finished it's task
-        # print('got message', msg)
         if msg.get('rewards', False):
             # print('Finished worker %d' % worker)
             # TODO dynamic task allocation based on relative delivery time?

@@ -46,13 +46,11 @@ class RNNClassifier(torch.nn.Module):
 from portable_es import ESManager, ESWorker
 from portable_es.optimizers import Adam, AdaBelief, RAdam, AdaMM, NovoGrad
 from portable_es.compat import GymWrapper
+from portable_es.scheduler import DecayScheduler
 
 config = {
-    # Hyperparameters
-    'sigma': 0.1,
-    'sigma_decay': 0.9999,
-    'lr': 0.03,         # Big population so we can afford a high learning rate
-    'lr_decay': 0.99999,
+    # Big population so we can afford a high learning rate
+    'scheduler': DecayScheduler(ilr=0.03, lr_decay=0.99999, isigma=0.1, sigma_decay=0.9999),
     'optimizer': NovoGrad(),
     'popsize': 256,
     'antithetic': True,
@@ -63,11 +61,11 @@ config = {
     'logdir': 'arcobot1-rnn-1',
 
     'model_class': RNNClassifier,
-    'model_args': (2,),
-    'model_kwargs': {'channels': 4, 'hidden': 5, 'layers': 2},
+    'model_args': (3,),
+    'model_kwargs': {'channels': 6, 'hidden': 5, 'layers': 3},
 
     'env_class': GymWrapper,
-    'env_config': {'gym_name': 'CartPole-v1', 'castf': argmax_cast},
+    'env_config': {'gym_name': 'Acrobot-v1', 'castf': argmax_cast},
     'env_episodes': 1,
     'env_eval_every': 5,
 }
