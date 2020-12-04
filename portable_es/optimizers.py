@@ -163,7 +163,6 @@ class RAdam(Optimizer):
         else:
             return stepsize*mt_hat
 
-
 class DecoupledWeightDecay(Optimizer):
     """
     As used in AdamW but in a wrapper module instead.
@@ -176,13 +175,18 @@ class DecoupledWeightDecay(Optimizer):
     """
     def __init__(self, base_optimizer, weight_decay=1e-5, use_stepsize=False):
         self.opt = base_optimizer
+        assert not self.opt.set_params and not self.opt.internal_mut, f"Optimizer doesn't work with {type(self.opt).__name__} optimizer"
         self.wd = weight_decay
-        self.usestep = use_stepsize
+        self.use_stepsize = use_stepsize
+
+    def reset(self, num_params, flat_init, param_shapes):
+        super().reset(num_params, flat_init, param_shapes)
+        self.opt.reset(num_params, flat_init, param_shapes)
 
     def compute_grads(self, origin_g, model, stepsize):
-        delta = super().compute_grads(self, origin_g, model, stepsize)
+        delta = self.opt.compute_grads(origin_g, model, stepsize)
         cparams = torch.nn.utils.parameters_to_vector(model.parameters())
-        if use_stepsize:
+        if self.use_stepsize:
             return delta - (stepsize * self.wd * cparams)
         return delta - (self.wd * cparams)
 
@@ -191,6 +195,7 @@ class LookAhead(Optimizer):
 
     def __init__(self, base_optimizer, k=10, alpha=0.5):
         self.opt = base_optimizer
+        assert not self.opt.set_params and not self.opt.internal_mut, f"Optimizer doesn't work with {type(self.opt).__name__} optimizer"
         self.k = k
         self.a = alpha
         self.step = 0
@@ -199,16 +204,16 @@ class LookAhead(Optimizer):
         super().reset(num_params, flat_init, param_shapes)
         self.slow = flat_init.clone().detach()
         self.fast = flat_init.clone().detach()
-        self.opt.reset(num_params, flat_init)
+        self.opt.reset(num_params, flat_init, param_shapes)
 
     def compute_grads(self, origin_g, model, stepsize):
         self.step += 1
         if self.step % self.k == 0:
-            self.fast += self.opt.compute_grads(origin_g, stepsize)
+            self.fast += self.opt.compute_grads(origin_g, model, stepsize)
             self.slow += (self.a * (self.fast - self.slow))
             self.fast.data.copy_(self.slow)
         else:
-            self.fast += self.opt.compute_grads(origin_g, stepsize)
+            self.fast += self.opt.compute_grads(origin_g, model, stepsize)
 
         return self.fast
 
