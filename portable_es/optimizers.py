@@ -164,6 +164,28 @@ class RAdam(Optimizer):
             return stepsize*mt_hat
 
 
+class DecoupledWeightDecay(Optimizer):
+    """
+    As used in AdamW but in a wrapper module instead.
+    
+    `DecoupledWeightDecay(Adam())` will give you AdamW
+
+    weight_decay should be approximately the same as in other frameworks unless you enable `use_stepsize`, 
+    which will require a larger weight_decay as it is multiplied by the learning rate; 
+    this is for usage with schedulers.
+    """
+    def __init__(self, base_optimizer, weight_decay=1e-5, use_stepsize=False):
+        self.opt = base_optimizer
+        self.wd = weight_decay
+        self.usestep = use_stepsize
+
+    def compute_grads(self, origin_g, model, stepsize):
+        delta = super().compute_grads(self, origin_g, model, stepsize)
+        cparams = torch.nn.utils.parameters_to_vector(model.parameters())
+        if use_stepsize:
+            return delta - (stepsize * self.wd * cparams)
+        return delta - (self.wd * cparams)
+
 class LookAhead(Optimizer):
     set_params = True # LookAhead maintains model params
 
