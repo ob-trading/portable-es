@@ -1,6 +1,7 @@
 from distributed_worker import DistributedManager, DistributedWorker
 from tensorboardX import SummaryWriter
 from typing import Tuple, Any
+from .timing import TimingManager
 import torch
 import copy
 import pprint
@@ -160,40 +161,47 @@ class ESWorker(DistributedWorker):
         self.env = None
         self.run_config = {}
 
+        self.profiler = TimingManager()
+
     def loop(self):
         cidx = len(self.results)
         if cidx < len(self.cseeds):
             # Apply model changes
-            # start_time = time.time()
+            with self.profiler.add('outer'): 
+                with self.profiler.add('model-init'): 
+                    cmodel = copy.deepcopy(self.model)
+                    cmodel.apply_seed(self.cseeds[cidx], scalar=1., sigma=self.run_config['sigma'])
 
-            cmodel = copy.deepcopy(self.model)
-            cmodel.apply_seed(self.cseeds[cidx], scalar=1., sigma=self.run_config['sigma'])
-            # cmodel.jit()
-            episode_reward = 0.
-            rstate = np.random.RandomState(self.env_seed)  # Is mutated by env
+                # cmodel.jit()
+                episode_reward = 0.
+                rstate = np.random.RandomState(self.env_seed)  # Is mutated by env
 
-            # Accumulate rewards accross different seeds (virtual batch)
-            for x in range(self.env_episodes):
-                self.env.randomize(rstate)
-                state = self.env.reset()
-                cmodel.reset()
-                
-                # TODO: model_autoregressive batch optimization
-                # Run through simulation
-                done = False
-                while not done:
-                    with torch.no_grad():
-                        action = cmodel(state.to(self.init_config['device']))
+                # Accumulate rewards accross different seeds (virtual batch)
+                for x in range(self.env_episodes):
+                    with self.profiler.add('env-init'):
+                        self.env.randomize(rstate)
+                        state = self.env.reset()
+                        cmodel.reset()
+                    
+                    # TODO: model_autoregressive batch optimization
+                    # Run through simulation
+                    done = False
+                    while not done:
+                        with self.profiler.add('model-eval'):                    
+                            with torch.no_grad():
+                                action = cmodel(state.to(self.init_config['device']))
 
-                    # Make no assumption on the format of action (no .cpu())
-                    state, reward, done = self.env.step(action)
-                    episode_reward += reward
-                # print(action)
+                        # Make no assumption on the format of action (no .cpu())
+                        with self.profiler.add('env-eval'):                    
+                            state, reward, done = self.env.step(action)
+                            episode_reward += reward
+                        
+                    # print(action)
 
-            # print('finished eval in %.3f' % (time.time() - start_time))
+                # print('finished eval in %.3f' % (time.time() - start_time))
 
-            # Average reward over all runs
-            self.results[self.cseeds[cidx]] = episode_reward / self.env_episodes
+                # Average reward over all runs
+                self.results[self.cseeds[cidx]] = episode_reward / self.env_episodes
 
             # Revert model changes
             # self.model.apply_seed(self.cseeds[cidx], scalar=-1.)
@@ -201,7 +209,7 @@ class ESWorker(DistributedWorker):
             # print('sending %d/%d rewards back' % (cidx, len(self.cseeds)))
             # print(self.results)
             # print('checksum after:', self.model.get_checksum())
-            self.send({'rewards': self.results})
+            self.send({'rewards': self.results, 'timings': self.profiler})
             self.results = {}
             self.cseeds = []
 
@@ -447,7 +455,7 @@ class ESManager(DistributedManager):
 
         active = self.get_active_workers()
         if active:
-            chunk = len(tasks) // len(active)
+            chunk = round(len(tasks) / len(active))
             for x in active:
                 if active[-1] != x:
                     task = tasks[:chunk]
@@ -483,4 +491,6 @@ class ESManager(DistributedManager):
             # TODO dynamic task allocation based on relative delivery time?
             for num in msg['rewards']:
                 self.results[num] = msg['rewards'][num]
+            
+            # print(f'worker {worker}: ', msg['timings'].summary())
             self.tasked.remove(worker)

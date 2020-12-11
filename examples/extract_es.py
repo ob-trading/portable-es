@@ -22,7 +22,6 @@ class ESExtractor(DistributedWorker):
         self._model = self.init_config['model_class'](
             *self.init_config['model_args'], **self.init_config['model_kwargs'])
         self.model = ModelWrapper(self._model)
-        self.model.set_config(self.run_config)
 
         self.optimizer = copy.deepcopy(self.init_config['optimizer'])
         self.optimizer.reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()))
@@ -39,7 +38,7 @@ class ESExtractor(DistributedWorker):
                 for update in tqdm(msg['update_history']):
                     self.model.update_from_epoch(update, optimizer=self.optimizer)
 
-client_args = (('localhost', 8003), 'AF_INET', b'secret password')
+client_args = (('localhost', 6000), 'AF_INET', b'secret password')
 pipe = multiprocessing.connection.Client(*client_args)
 worker = ESExtractor(pipe)
 while worker.model == None:
