@@ -220,6 +220,7 @@ class ESWorker(DistributedWorker):
         self.model = ModelWrapper(self._model, device=self.init_config['device'])
         self.optimizer = self.init_config['optimizer']
         # NOTE: May hang on older version of pytorch for some reason, probably a deadlock in the cloning mechanism (<=1.4.0)
+        # NOTE UPDATE: Seems to occur on 1.7.1 (alpine) as well, is fixed with OMP_NUM_THREADS=1, but only when set outside of the program :thinking:
         self.optimizer.reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()).detach(), self.model.model_shapes)
         
     def create_env(self):
