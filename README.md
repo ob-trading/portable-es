@@ -70,8 +70,8 @@ We may add support for the regular PyTorch optimizers later on.
 - [ ] Implement and test ESAC (ES+SAC)
 - [ ] Make it more modular
   - [ ] Make `reward_norm` extendable
-  - [ ] Create a hyperparameter scheduler
-- [ ] Further Profile portable_es
+  - [x] Create a hyperparameter scheduler
+- [x] Further Profile portable_es
 - [ ] Write-up on zeroth-order optimization
 - [ ] Recurrent wrapper
 - [ ] Auto-rejoining workers
