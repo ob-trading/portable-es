@@ -167,41 +167,41 @@ class ESWorker(DistributedWorker):
         cidx = len(self.results)
         if cidx < len(self.cseeds):
             # Apply model changes
-            with self.profiler.add('outer'): 
-                with self.profiler.add('model-init'): 
-                    cmodel = copy.deepcopy(self.model)
-                    cmodel.apply_seed(self.cseeds[cidx], scalar=1., sigma=self.run_config['sigma'])
+            with torch.no_grad():
+                with self.profiler.add('outer'): 
+                    with self.profiler.add('model-init'): 
+                        cmodel = copy.deepcopy(self.model)
+                        cmodel.apply_seed(self.cseeds[cidx], scalar=1., sigma=self.run_config['sigma'])
 
-                # cmodel.jit()
-                episode_reward = 0.
-                rstate = np.random.RandomState(self.env_seed)  # Is mutated by env
+                    # cmodel.jit()
+                    episode_reward = 0.
+                    rstate = np.random.RandomState(self.env_seed)  # Is mutated by env
 
-                # Accumulate rewards accross different seeds (virtual batch)
-                for x in range(self.env_episodes):
-                    with self.profiler.add('env-init'):
-                        self.env.randomize(rstate)
-                        state = self.env.reset()
-                        cmodel.reset()
-                    
-                    # TODO: model_autoregressive batch optimization
-                    # Run through simulation
-                    done = False
-                    while not done:
-                        with self.profiler.add('model-eval'):                    
-                            with torch.no_grad():
+                    # Accumulate rewards accross different seeds (virtual batch)
+                    for x in range(self.env_episodes):
+                        with self.profiler.add('env-init'):
+                            self.env.randomize(rstate)
+                            state = self.env.reset()
+                            cmodel.reset()
+                        
+                        # TODO: model_autoregressive batch optimization
+                        # Run through simulation
+                        done = False
+                        while not done:
+                            with self.profiler.add('model-eval'):                    
                                 action = cmodel(state.to(self.init_config['device']))
 
-                        # Make no assumption on the format of action (no .cpu())
-                        with self.profiler.add('env-eval'):                    
-                            state, reward, done = self.env.step(action)
-                            episode_reward += reward
-                        
-                    # print(action)
+                            # Make no assumption on the format of action (no .cpu())
+                            with self.profiler.add('env-eval'):                    
+                                state, reward, done = self.env.step(action)
+                                episode_reward += reward
+                            
+                        # print(action)
 
-                # print('finished eval in %.3f' % (time.time() - start_time))
+                    # print('finished eval in %.3f' % (time.time() - start_time))
 
-                # Average reward over all runs
-                self.results[self.cseeds[cidx]] = episode_reward / self.env_episodes
+                    # Average reward over all runs
+                    self.results[self.cseeds[cidx]] = episode_reward / self.env_episodes
 
             # Revert model changes
             # self.model.apply_seed(self.cseeds[cidx], scalar=-1.)
@@ -248,12 +248,14 @@ class ESWorker(DistributedWorker):
 
             if msg.get('update_history', False):
                 # Recreate model
-                for update in msg['update_history']:
-                    self.model.update_from_epoch(update, optimizer=self.optimizer)
+                with torch.no_grad():
+                    for update in msg['update_history']:
+                        self.model.update_from_epoch(update, optimizer=self.optimizer)
 
             if msg.get('update', False):
                 # {seed: weight, ...}
-                self.model.update_from_epoch(msg['update'], optimizer=self.optimizer)
+                with torch.no_grad():
+                    self.model.update_from_epoch(msg['update'], optimizer=self.optimizer)
                 # TODO: auto validation?
                 # print('checksum:', self.model.get_checksum())
 
@@ -340,8 +342,9 @@ class ESManager(DistributedManager):
         if epoch_s > 0:
             self.writer.add_scalar('time_per_epoch', epoch_s, self.epoch)
         if log_stats:
-            print(torch.std(delta), torch.mean(delta),
-                  torch.median(delta), torch.max(delta))
+            with torch.no_grad():
+                print(torch.std(delta), torch.mean(delta),
+                    torch.median(delta), torch.max(delta))
             # print(rewards)
 
     def get_processed_rewards(self):
@@ -380,18 +383,18 @@ class ESManager(DistributedManager):
 
         self.env.randomize(np.random.RandomState(420691))
         state = self.env.reset()
-        model.reset()
 
         # Run through simulation
         done = False
         episode_reward = 0
-        while not done:
-            with torch.no_grad():
+        with torch.no_grad():
+            model.reset()
+            while not done:
                 action = model(state.to(self['device']))
 
-            # Make no assumption on the format of action
-            state, reward, done = self.env.step(action)
-            episode_reward += reward
+                # Make no assumption on the format of action
+                state, reward, done = self.env.step(action)
+                episode_reward += reward
 
         self.writer.add_scalar('master_reward', episode_reward, self.epoch)
 
@@ -409,8 +412,9 @@ class ESManager(DistributedManager):
         self.raw_history.append(self.results)
         self.update_history.append(update)
 
-        delta = self.model.update_from_epoch(update, optimizer=self['optimizer'])
-        self.print_log(delta, self.results)
+        with torch.no_grad():
+            delta = self.model.update_from_epoch(update, optimizer=self['optimizer'])
+            self.print_log(delta, self.results)
         self.broadcast({'update': update})
         self.results = {}
         self.epoch += 1
