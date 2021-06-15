@@ -2,11 +2,13 @@ from distributed_worker import DistributedManager, DistributedWorker
 from tensorboardX import SummaryWriter
 from typing import Tuple, Any
 from .timing import TimingManager
+from .utils import params2vector, create_deco_meta
 import torch
 import copy
 import pprint
 import numpy as np
 import time
+import gc
 
 def compute_ranks(x):
     """
@@ -36,12 +38,12 @@ def sign(a):
     return (a > 0) - (a < 0)
 
 def get_random_tensor(shape, device, seed):
-    gen = torch._C.Generator(device=device)
+    gen = torch.Generator(device=device)
     gen.manual_seed(abs(int(seed)))
-    partial_delta = torch.randn((shape,), generator=gen, requires_grad=False, device=device)
+    partial_delta = torch.randn((shape,), generator=gen, requires_grad=False, device=device).detach()
     return partial_delta
 
-class ModelWrapper(torch.nn.Module):
+class ModelWrapper(metaclass=create_deco_meta([torch.no_grad()])):
     def __init__(self, model, device="cpu", **kwargs):
         super().__init__()
         self.device = torch.device(device)
@@ -55,10 +57,10 @@ class ModelWrapper(torch.nn.Module):
             self.model_shapes.append(param.data.shape)
             self.NPARAMS += np.product(param.data.shape)
 
-        self.eval()
 
     # Adds to params
-    def update_from_delta(self, delta):
+    def update_from_delta(self, delta, alpha=1):
+        delta = delta.detach()
         idx = 0
         i = 0
         for param in self.model.parameters():
@@ -67,10 +69,11 @@ class ModelWrapper(torch.nn.Module):
             block = block.view(self.model_shapes[i])
             i += 1
             idx += size
-            param.data += block
+            param.data.add_(block, alpha=alpha)
 
     # Overwrites params
     def set_from_delta(self, delta):
+        delta = delta.detach()
         idx = 0
         i = 0
         for param in self.model.parameters():
@@ -85,7 +88,7 @@ class ModelWrapper(torch.nn.Module):
         seed_dict = update['deltas']
 
         delta = torch.zeros(
-            (self.NPARAMS,), requires_grad=False, device=self.device)
+            (self.NPARAMS,), requires_grad=False, device=self.device).detach()
 
         sigma = update['sigma']
         alpha = update['lr']
@@ -104,9 +107,10 @@ class ModelWrapper(torch.nn.Module):
         if optimizer.set_params:
             self.set_from_delta(optimizer.compute_grads(delta, self.model, alpha))
         elif optimizer.internal_mut:
-            x = torch.nn.utils.parameters_to_vector(self.model.parameters())
+            # TODO: replace p_t_v with own impl for consistency
+            x = params2vector(self.model.parameters()).detach()
             optimizer.compute_grads(delta, self.model, alpha)
-            delta = torch.nn.utils.parameters_to_vector(self.model.parameters()) - x
+            delta = params2vector(self.model.parameters()).detach() - x
         else:
             delta = optimizer.compute_grads(delta, self.model, alpha)
             self.update_from_delta(delta)
@@ -116,10 +120,11 @@ class ModelWrapper(torch.nn.Module):
 
     def apply_seed(self, seed, scalar=1., sigma=None):
         seed = int(seed)
-        delta = get_random_tensor(self.NPARAMS, str(self.device), seed) * (sigma  * scalar * sign(seed))
-        self.update_from_delta(delta)
+        delta = get_random_tensor(self.NPARAMS, str(self.device), seed) 
+        self.update_from_delta(delta, alpha=(sigma  * scalar * sign(seed)))
 
     def apply_sparse_delta(self, sparse_params):
+        sparse_params = sparse_params.detach()
         idx = 0
         i = 0
         for param in self.model.parameters():
@@ -132,7 +137,7 @@ class ModelWrapper(torch.nn.Module):
             idx += size
 
     def forward(self, *args, **kwargs):
-        return self.model.forward(*args, **kwargs)
+        return self.model(*args, **kwargs)
 
     def reset(self):
         if hasattr(self.model, 'reset'):
@@ -152,7 +157,7 @@ class ModelWrapper(torch.nn.Module):
         return acc
 
 
-class ESWorker(DistributedWorker):
+class ESWorker(DistributedWorker, metaclass=create_deco_meta([torch.no_grad()])):
     def __init__(self, pipe):
         super().__init__(pipe)
         self.results = {}
@@ -161,42 +166,42 @@ class ESWorker(DistributedWorker):
         self.env = None
         self.run_config = {}
 
-        self.profiler = TimingManager()
 
     def loop(self):
+        gc.collect()
         cidx = len(self.results)
         if cidx < len(self.cseeds):
             # Apply model changes
-            with torch.no_grad():
-                with self.profiler.add('outer'): 
-                    with self.profiler.add('model-init'): 
-                        cmodel = copy.deepcopy(self.model)
-                        cmodel.apply_seed(self.cseeds[cidx], scalar=1., sigma=self.run_config['sigma'])
+            with self.profiler.add('outer'): 
+                with self.profiler.add('model-init'): 
+                    cmodel = copy.deepcopy(self.model)
+                    #cmodel = self.model
+                    cmodel.apply_seed(self.cseeds[cidx], scalar=1., sigma=self.run_config['sigma'])
 
-                    # cmodel.jit()
-                    episode_reward = 0.
-                    rstate = np.random.RandomState(self.env_seed)  # Is mutated by env
+                # cmodel.jit()
+                episode_reward = 0.
+                rstate = np.random.RandomState(self.env_seed)  # Is mutated by env
 
-                    # Accumulate rewards accross different seeds (virtual batch)
-                    for x in range(self.env_episodes):
-                        with self.profiler.add('env-init'):
-                            self.env.randomize(rstate)
-                            state = self.env.reset()
-                            cmodel.reset()
+                # Accumulate rewards accross different seeds (virtual batch)
+                for x in range(self.env_episodes):
+                    with self.profiler.add('env-init'):
+                        self.env.randomize(rstate)
+                        state = self.env.reset()
+                        cmodel.reset()
+                    
+                    # TODO: model_autoregressive batch optimization
+                    # Run through simulation
+                    done = False
+                    while not done:
+                        with self.profiler.add('model-eval'):                    
+                            action = cmodel.forward(state.to(self.init_config['device']))
+
+                        # Make no assumption on the format of action (no .cpu())
+                        with self.profiler.add('env-eval'):                    
+                            state, reward, done = self.env.step(action)
+                            episode_reward += reward
                         
-                        # TODO: model_autoregressive batch optimization
-                        # Run through simulation
-                        done = False
-                        while not done:
-                            with self.profiler.add('model-eval'):                    
-                                action = cmodel(state.to(self.init_config['device']))
-
-                            # Make no assumption on the format of action (no .cpu())
-                            with self.profiler.add('env-eval'):                    
-                                state, reward, done = self.env.step(action)
-                                episode_reward += reward
-                            
-                        # print(action)
+                    # print(action)
 
                     # print('finished eval in %.3f' % (time.time() - start_time))
 
@@ -205,14 +210,17 @@ class ESWorker(DistributedWorker):
 
             # Revert model changes
             # self.model.apply_seed(self.cseeds[cidx], scalar=-1.)
+            #cmodel.apply_seed(self.cseeds[cidx], scalar=-1., sigma=self.run_config['sigma'])
+            del cmodel
         elif len(self.results) == len(self.cseeds) and len(self.results) > 0:
             # print('sending %d/%d rewards back' % (cidx, len(self.cseeds)))
             # print(self.results)
             # print('checksum after:', self.model.get_checksum())
-            self.send({'rewards': self.results, 'timings': self.profiler})
+            # TODO: send back avg time so manager can estimate workload
+            self.send({'rewards': self.results})
             self.results = {}
             self.cseeds = []
-
+    
     def create_model(self):
         torch.manual_seed(2)
         self._model = self.init_config['model_class'](
@@ -221,7 +229,7 @@ class ESWorker(DistributedWorker):
         self.optimizer = self.init_config['optimizer']
         # NOTE: May hang on older version of pytorch for some reason, probably a deadlock in the cloning mechanism (<=1.4.0)
         # NOTE UPDATE: Seems to occur on 1.7.1 (alpine) as well, is fixed with OMP_NUM_THREADS=1, but only when set outside of the program :thinking:
-        self.optimizer.reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()).detach(), self.model.model_shapes)
+        self.optimizer.reset(self.model.NPARAMS, params2vector(self.model.model.parameters()).detach(), self.model.model_shapes)
         
     def create_env(self):
         self.env_class = self.init_config['env_class']
@@ -244,23 +252,22 @@ class ESWorker(DistributedWorker):
                 self.env_seed = msg['run']['env_seed']
                 self.run_config = msg['run']['config']
                 self.results = {}
+                self.profiler = TimingManager()
                 # print('Running', self.env_seed)
 
             if msg.get('update_history', False):
                 # Recreate model
-                with torch.no_grad():
-                    for update in msg['update_history']:
-                        self.model.update_from_epoch(update, optimizer=self.optimizer)
+                for update in msg['update_history']:
+                    self.model.update_from_epoch(update, optimizer=self.optimizer)
 
             if msg.get('update', False):
                 # {seed: weight, ...}
-                with torch.no_grad():
-                    self.model.update_from_epoch(msg['update'], optimizer=self.optimizer)
+                self.model.update_from_epoch(msg['update'], optimizer=self.optimizer)
                 # TODO: auto validation?
                 # print('checksum:', self.model.get_checksum())
 
 
-class ESManager(DistributedManager):
+class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()])):
     def __init__(self, config):
         super().__init__("0.0.0.0")
         self.tasked = set()
@@ -294,7 +301,7 @@ class ESManager(DistributedManager):
             *self['model_args'], **self['model_kwargs'])
         self.model = ModelWrapper(_model, device=self['device'])
 
-        self['optimizer'].reset(self.model.NPARAMS, torch.nn.utils.parameters_to_vector(self.model.model.parameters()), self.model.model_shapes)
+        self['optimizer'].reset(self.model.NPARAMS, params2vector(self.model.model.parameters()).detach(), self.model.model_shapes)
 
     @property
     def _worker_config(self):
@@ -342,8 +349,7 @@ class ESManager(DistributedManager):
         if epoch_s > 0:
             self.writer.add_scalar('time_per_epoch', epoch_s, self.epoch)
         if log_stats:
-            with torch.no_grad():
-                print(torch.std(delta), torch.mean(delta),
+            print(torch.std(delta), torch.mean(delta),
                     torch.median(delta), torch.max(delta))
             # print(rewards)
 
@@ -379,22 +385,19 @@ class ESManager(DistributedManager):
         return update
 
     def eval(self):
-        model = copy.deepcopy(self.model.model)
-
         self.env.randomize(np.random.RandomState(420691))
         state = self.env.reset()
 
         # Run through simulation
         done = False
         episode_reward = 0
-        with torch.no_grad():
-            model.reset()
-            while not done:
-                action = model(state.to(self['device']))
+        self.model.reset()
+        while not done:
+            action = self.model.forward(state.to(self['device']))
 
-                # Make no assumption on the format of action
-                state, reward, done = self.env.step(action)
-                episode_reward += reward
+            # Make no assumption on the format of action
+            state, reward, done = self.env.step(action)
+            episode_reward += reward
 
         self.writer.add_scalar('master_reward', episode_reward, self.epoch)
 
@@ -412,9 +415,8 @@ class ESManager(DistributedManager):
         self.raw_history.append(self.results)
         self.update_history.append(update)
 
-        with torch.no_grad():
-            delta = self.model.update_from_epoch(update, optimizer=self['optimizer'])
-            self.print_log(delta, self.results)
+        delta = self.model.update_from_epoch(update, optimizer=self['optimizer'])
+        self.print_log(delta, self.results)
         self.broadcast({'update': update})
         self.results = {}
         self.epoch += 1
@@ -428,6 +430,7 @@ class ESManager(DistributedManager):
         pass
 
     def loop(self):
+        gc.collect()
         # No tasks pending, wait on exit
         if self.epoch > self['epochs']:
             self.done = True
@@ -497,5 +500,4 @@ class ESManager(DistributedManager):
             for num in msg['rewards']:
                 self.results[num] = msg['rewards'][num]
             
-            # print(f'worker {worker}: ', msg['timings'].summary())
             self.tasked.remove(worker)

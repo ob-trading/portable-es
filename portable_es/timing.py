@@ -2,7 +2,6 @@ import time
 import numpy as np
 from dataclasses import dataclass
 
-@dataclass
 class Timing:
     """
     Calculates time it took to complete the marked block
@@ -21,7 +20,6 @@ class Timing:
         dtimes = np.array(self.dtimes)
         return {'mean': np.mean(dtimes), 'std': np.std(dtimes), 'count': len(dtimes), 'cumm': np.sum(dtimes)}
 
-@dataclass
 class TimingManager:
     """
     Manages different 'Timing's classes and creates an easily printable/picklable object

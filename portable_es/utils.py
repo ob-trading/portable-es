@@ -1,8 +1,11 @@
 import math
 import copy
 import torch
-from functools import wraps
+import numpy as np
+import types
 import inspect
+from typing import Any, Callable, List, TypeVar
+from functools import wraps
 
 def create_log_gaussian(mean, log_std, t):
     quadratic = -((0.5 * (t - mean) / (log_std.exp())).pow(2))
@@ -84,3 +87,45 @@ def initializer(func):
         func(self, *args, **kargs)
 
     return wrapper
+
+
+# TODO: generalize to apply_vec2param and apply_param2vec?
+def params2vector(params, shapes=None):
+    if not shapes:
+        shapes = []
+        for param in params:
+            shapes.append(param.data.shape)
+
+    NPARAMS = np.sum([np.prod(x) for x in shapes])
+    vec = torch.zeros((NPARAMS,), requires_grad=False)
+    idx = 0
+    i = 0
+    for param in params:
+        size = np.product(shapes[i])
+        vec[idx:idx+size] = param.data.view(-1)
+        idx += size
+        i += 1
+
+    return vec
+
+FuncT = TypeVar("FuncT", bound=Callable[..., Any])
+
+def create_deco_meta(wrappers: List[FuncT]):
+    class DecoMeta(type):
+        def __new__(cls, name, bases, attrs):
+            for attr_name, attr_value in attrs.items():
+                if isinstance(attr_value, types.FunctionType):
+                    attrs[attr_name] = cls.deco(attr_value)
+
+            return super().__new__(cls, name, bases, attrs)
+
+        @classmethod
+        def deco(cls, func: FuncT) -> FuncT:
+            prev = func
+            for wraps in reversed(wrappers):
+                #print(f'wrapping {prev.__name__} with {wraps.__name__}')
+                prev = wraps(prev)
+            return prev
+    
+    return DecoMeta
+

@@ -1,10 +1,15 @@
 import torch
 import numpy as np
+from .utils import params2vector, create_deco_meta
+
 
 #! Note: use Zeros_like (and similar) so the device/requires_grad get transferred as well
 class Optimizer:
     set_params = False # Overwrite params instead of updating
     internal_mut = False # Modifying parameters in-place (1.4+)
+
+    def __init__(self):
+        pass
 
     # All memory alloc here
     def reset(self, num_params, flat_init, param_shapes):
@@ -28,7 +33,7 @@ class SGD(Optimizer):
 
     def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init, param_shapes)
-        self.v = torch.zeros_like(flat_init)
+        self.v = torch.zeros_like(flat_init, requires_grad=False)
 
     def compute_grads(self, origin_g, model, stepsize):
         self.v = self.momentum * self.v + (1.0 - self.momentum) * origin_g
@@ -42,8 +47,8 @@ class Adam(Optimizer):
     
     def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init, param_shapes)
-        self.m = torch.zeros_like(flat_init)
-        self.v = torch.zeros_like(flat_init)
+        self.m = torch.zeros_like(flat_init, requires_grad=False)
+        self.v = torch.zeros_like(flat_init, requires_grad=False)
         self.step = 0
 
     def compute_grads(self, origin_g, model, stepsize):
@@ -64,8 +69,8 @@ class AdaBelief(Optimizer):
     
     def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init, param_shapes)
-        self.m = torch.zeros_like(flat_init)
-        self.s = torch.zeros_like(flat_init)
+        self.m = torch.zeros_like(flat_init, requires_grad=False)
+        self.s = torch.zeros_like(flat_init, requires_grad=False)
         self.step = 0
 
     def compute_grads(self, origin_g, model, stepsize):
@@ -86,9 +91,9 @@ class AdaMM(Optimizer):
 
     def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init, param_shapes)
-        self.m = torch.zeros_like(flat_init)
-        self.v_hat = self.v_init * torch.ones_like(flat_init)
-        self.v = self.v_init * torch.ones_like(flat_init)
+        self.m = torch.zeros_like(flat_init, requires_grad=False)
+        self.v_hat = self.v_init * torch.ones_like(flat_init, requires_grad=False)
+        self.v = self.v_init * torch.ones_like(flat_init, requires_grad=False)
 
     def compute_grads(self, origin_g, model, stepsize):
         self.m = self.beta1 * self.m + (1 - self.beta1) * origin_g
@@ -145,8 +150,8 @@ class RAdam(Optimizer):
     def reset(self, num_params, flat_init, param_shapes):
         super().reset(num_params, flat_init, param_shapes)
         # self.v_hat = self.v_init * torch.ones((self.dim,), requires_grad=False)
-        self.m = torch.zeros_like(flat_init)
-        self.v = torch.zeros_like(flat_init)
+        self.m = torch.zeros_like(flat_init, requires_grad=False)
+        self.v = torch.zeros_like(flat_init, requires_grad=False)
         self.step = 0
 
     def compute_grads(self, origin_g, model, stepsize):
@@ -185,7 +190,7 @@ class DecoupledWeightDecay(Optimizer):
 
     def compute_grads(self, origin_g, model, stepsize):
         delta = self.opt.compute_grads(origin_g, model, stepsize)
-        cparams = torch.nn.utils.parameters_to_vector(model.parameters())
+        cparams = params2vector(model.parameters()).detach()
         if self.use_stepsize:
             return delta - (stepsize * self.wd * cparams)
         return delta - (self.wd * cparams)
@@ -231,7 +236,7 @@ class NovoGrad(Optimizer):
 
         self.m = []
         for s in param_shapes:
-            self.m.append(torch.zeros(s, dtype=flat_init.dtype, device=flat_init.device, requires_grad=flat_init.requires_grad))
+            self.m.append(torch.zeros(s, dtype=flat_init.dtype, device=flat_init.device, requires_grad=False))
         self.v = np.zeros(len(param_shapes))
         self.step = 0
 
