@@ -25,10 +25,14 @@ class TimingManager:
     Manages different 'Timing's classes and creates an easily printable/picklable object
     """
 
-    def __init__(self):
+    def __init__(self, dry=False):
         self.timings = {}
+        self.dry = dry
 
     def add(self, name):
+        if self.dry:
+            return Timing()
+
         if not self.timings.get(name, None):
             self.timings[name] = Timing()
         

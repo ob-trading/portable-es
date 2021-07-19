@@ -252,7 +252,7 @@ class ESWorker(DistributedWorker, metaclass=create_deco_meta([torch.no_grad()]))
                 self.env_seed = msg['run']['env_seed']
                 self.run_config = msg['run']['config']
                 self.results = {}
-                self.profiler = TimingManager()
+                self.profiler = TimingManager(dry=True)
                 # print('Running', self.env_seed)
 
             if msg.get('update_history', False):
