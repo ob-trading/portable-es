@@ -38,7 +38,7 @@ class EnvInterface:
   def reset(self) -> torch.Tensor;
   # Get stats/dist from a single run; can be found in tensorboard
   # Format {'scalars': {[str]: float}, 'images': {[str]: numpy.ndarray}}
-  def eval(self) -> dict;
+  def eval(self, types: Optional[List[str]]) -> dict;
 ```
 
 ## Configuring your training

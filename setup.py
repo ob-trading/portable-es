@@ -29,6 +29,7 @@ setuptools.setup(
         'torch',
         'numpy',
         'tensorboardx',
-        'distributed_worker>=1.3.2'
+        'distributed_worker>=1.3.2',
+        'awkward'
     ],
 )

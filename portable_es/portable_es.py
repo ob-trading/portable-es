@@ -1,14 +1,17 @@
 from distributed_worker import DistributedManager, DistributedWorker
 from tensorboardX import SummaryWriter
-from typing import Tuple, Any
+from typing import Tuple, Any, Optional
 from .timing import TimingManager
 from .utils import params2vector, create_deco_meta
+from randomgen import Romu
 import torch
 import copy
 import pprint
+import awkward as ak
 import numpy as np
 import time
 import gc
+import tqdm
 
 def compute_ranks(x):
     """
@@ -40,7 +43,14 @@ def sign(a):
 def get_random_tensor(shape, device, seed):
     gen = torch.Generator(device=device)
     gen.manual_seed(abs(int(seed)))
-    partial_delta = torch.randn((shape,), generator=gen, requires_grad=False, device=device).detach()
+    partial_delta = torch.randn(shape, generator=gen, requires_grad=False, device=device).detach()
+    return partial_delta
+
+def get_random_tensor_v2(shape, device, seed):
+    # 1.394x faster than v1 on CPU 
+    # Uniform Romu-trio is fastest (https://bashtage.github.io/randomgen/performance.html)
+    prng = np.random.Generator(Romu(seed=seed, variant='trio'))
+    partial_delta = torch.from_numpy(prng.uniform(-1.,1., shape)).detach().to(device)
     return partial_delta
 
 class ModelWrapper(metaclass=create_deco_meta([torch.no_grad()])):
@@ -99,7 +109,7 @@ class ModelWrapper(metaclass=create_deco_meta([torch.no_grad()])):
 
         for seed in seed_dict:
             psign = sign(int(seed))
-            partial_delta = get_random_tensor(self.NPARAMS, str(self.device), seed) * (sigma * seed_dict[seed] * psign)
+            partial_delta = get_random_tensor((self.NPARAMS,), str(self.device), seed) * (sigma * seed_dict[seed] * psign)
 
             optimizer.process_subgrad(partial_delta)
             delta += partial_delta
@@ -120,7 +130,7 @@ class ModelWrapper(metaclass=create_deco_meta([torch.no_grad()])):
 
     def apply_seed(self, seed, scalar=1., sigma=None):
         seed = int(seed)
-        delta = get_random_tensor(self.NPARAMS, str(self.device), seed) 
+        delta = get_random_tensor((self.NPARAMS,), str(self.device), seed) 
         self.update_from_delta(delta, alpha=(sigma  * scalar * sign(seed)))
 
     def apply_sparse_delta(self, sparse_params):
@@ -161,11 +171,11 @@ class ESWorker(DistributedWorker, metaclass=create_deco_meta([torch.no_grad()]))
     def __init__(self, pipe):
         super().__init__(pipe)
         self.results = {}
+        self.stats = []
         self.cseeds = []
         self.model = None
         self.env = None
         self.run_config = {}
-
 
     def loop(self):
         gc.collect()
@@ -207,6 +217,7 @@ class ESWorker(DistributedWorker, metaclass=create_deco_meta([torch.no_grad()]))
 
                     # Average reward over all runs
                     self.results[self.cseeds[cidx]] = episode_reward / self.env_episodes
+                    self.stats.append(self.env.eval(types=['scalars']))
 
             # Revert model changes
             # self.model.apply_seed(self.cseeds[cidx], scalar=-1.)
@@ -217,19 +228,23 @@ class ESWorker(DistributedWorker, metaclass=create_deco_meta([torch.no_grad()]))
             # print(self.results)
             # print('checksum after:', self.model.get_checksum())
             # TODO: send back avg time so manager can estimate workload
-            self.send({'rewards': self.results})
+            self.send({'rewards': self.results, 'stats': self.stats})
+            self.stats = []
             self.results = {}
             self.cseeds = []
     
-    def create_model(self):
+    def create_model(self, model_ckpt: Optional[torch.nn.Module] = None):
         torch.manual_seed(2)
-        self._model = self.init_config['model_class'](
-            *self.init_config['model_args'], **self.init_config['model_kwargs'])
+        if model_ckpt:
+            self._model = model_ckpt
+        else:
+            self._model = self.init_config['model_class'](
+                *self.init_config['model_args'], **self.init_config['model_kwargs'])
         self.model = ModelWrapper(self._model, device=self.init_config['device'])
         self.optimizer = self.init_config['optimizer']
         # NOTE: May hang on older version of pytorch for some reason, probably a deadlock in the cloning mechanism (<=1.4.0)
         # NOTE UPDATE: Seems to occur on 1.7.1 (alpine) as well, is fixed with OMP_NUM_THREADS=1, but only when set outside of the program :thinking:
-        self.optimizer.reset(self.model.NPARAMS, params2vector(self.model.model.parameters()).detach(), self.model.model_shapes)
+        self.optimizer.reset(self.model.NPARAMS, params2vector(self.model.model.parameters()).detach(), self.model.model_shapes, self._model)
         
     def create_env(self):
         self.env_class = self.init_config['env_class']
@@ -244,7 +259,7 @@ class ESWorker(DistributedWorker, metaclass=create_deco_meta([torch.no_grad()]))
                 self.init_config = msg['init']
                 if self.init_config['device'] == 'cuda':
                     self.init_config['device'] += ':%d' % np.random.randint(0, torch.cuda.device_count())
-                self.create_model() 
+                self.create_model(msg.get('model_ckpt'))
                 self.create_env()
 
             if msg.get('run', False):
@@ -269,19 +284,24 @@ class ESWorker(DistributedWorker, metaclass=create_deco_meta([torch.no_grad()]))
 
 class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()])):
     def __init__(self, config):
+        assert not (config.get('update_history') and config.get('model_ckpt')), "Only one of update_history or model_ckpt can be used for initialization"
         super().__init__("0.0.0.0")
+
         self.tasked = set()
         self.done = False
+        
         self.config = config
         self.iconfig = copy.deepcopy(config)
+
         
         if 'cuda' in self['device']:
             # For pytorch CUDA
             from multiprocessing import set_start_method
             set_start_method('spawn')
 
+        self.model_stats = [] 
         self.results = {}
-        self.update_history = []
+        self.update_history = config.get('update_history', [])
         self.raw_history = []
         self.config_history = []
         self.epoch = 0
@@ -297,11 +317,23 @@ class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()]
         self.env_rand = np.random.RandomState(seed=self.config.get('seed', 42)) 
 
         torch.manual_seed(2)
-        _model = self['model_class'](
-            *self['model_args'], **self['model_kwargs'])
+        if config.get('model_ckpt'):
+            print('Loading model from checkpoint')
+            self.model_ckpt = torch.load(self.config.get('model_ckpt'))
+            _model = copy.deepcopy(self.model_ckpt) 
+        else:
+            self.model_ckpt = None
+            _model = self['model_class'](
+                *self['model_args'], **self['model_kwargs'])
         self.model = ModelWrapper(_model, device=self['device'])
 
-        self['optimizer'].reset(self.model.NPARAMS, params2vector(self.model.model.parameters()).detach(), self.model.model_shapes)
+        self['optimizer'].reset(self.model.NPARAMS, params2vector(self.model.model.parameters()).detach(), self.model.model_shapes, _model)
+        # TODO: implement model_ckpt load path (and messages)
+        if self.update_history:
+            print("Rebuilding model from update_history, this can take a moment (also a lot of RAM)")
+            for update in tqdm.tqdm(self.update_history):
+                self.model.update_from_epoch(update, optimizer=self['optimizer'])
+            self.epoch = len(self.update_history)
 
     @property
     def _worker_config(self):
@@ -348,6 +380,7 @@ class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()]
         self.writer.add_scalar('update_norm', delta_e, self.epoch)
         if epoch_s > 0:
             self.writer.add_scalar('time_per_epoch', epoch_s, self.epoch)
+
         if log_stats:
             print(torch.std(delta), torch.mean(delta),
                     torch.median(delta), torch.max(delta))
@@ -369,7 +402,7 @@ class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()]
 
         # TODO: validate
         if x.std() == 0.:
-            i = self.rand.randint(0, len(fresult))
+            i = self.rand.randint(0, len(x))
             x[:] = 0
             x[i] += 1 # Choose random agent to be the new leader
 
@@ -383,6 +416,23 @@ class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()]
         fresult = self.get_processed_rewards()
         update = {**self._worker_config, 'deltas': fresult}
         return update
+
+    def _process_writer_data(self, data: dict):
+        for key in data.get('scalars', {}):
+            self.writer.add_scalar(key, data['scalars'][key], self.epoch)
+
+        for key in data.get('images', {}):
+            self.writer.add_image(key, data['images'][key], self.epoch)
+
+    def _process_model_stats(self):
+        model_stats = ak.Array(self.model_stats)
+        writer_data = {}
+        for k in model_stats['scalars'].fields:
+            writer_data[f'mean_{k}'] = np.nanmean(model_stats['scalars'][k])
+            writer_data[f'std_{k}'] = np.nanstd(model_stats['scalars'][k])
+
+        self._process_writer_data({'scalars': writer_data})
+        self.model_stats = []
 
     def eval(self):
         self.env.randomize(np.random.RandomState(420691))
@@ -402,11 +452,7 @@ class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()]
         self.writer.add_scalar('master_reward', episode_reward, self.epoch)
 
         data = self.env.eval()
-        for key in data.get('scalars', {}):
-            self.writer.add_scalar(key, data['scalars'][key], self.epoch)
-
-        for key in data.get('images', {}):
-            self.writer.add_image(key, data['images'][key], self.epoch)
+        self._process_writer_data(data)
 
     def on_es_ready(self):
         self.running = False
@@ -417,6 +463,8 @@ class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()]
 
         delta = self.model.update_from_epoch(update, optimizer=self['optimizer'])
         self.print_log(delta, self.results)
+        self._process_model_stats()
+
         self.broadcast({'update': update})
         self.results = {}
         self.epoch += 1
@@ -482,7 +530,8 @@ class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()]
     def on_new_worker(self, worker: int):
         print('New worker added %d' % worker)
         self.send(worker, {'init': self.iconfig,
-                           'update_history': self.update_history})
+                           'update_history': self.update_history,
+                           'model_ckpt': self.model_ckpt})
 
     def on_worker_disconnect(self, worker: int):
         print('Worker disconnected %d' % worker)
@@ -501,3 +550,6 @@ class ESManager(DistributedManager, metaclass=create_deco_meta([torch.no_grad()]
                 self.results[num] = msg['rewards'][num]
             
             self.tasked.remove(worker)
+
+        if msg.get('stats', False):
+            self.model_stats.extend(msg['stats'])
